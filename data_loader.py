@@ -1,229 +1,241 @@
-"""
-data_loader.py — CASTNET Dashboard Data Bridge
-================================================
-Reads outputs written by the four Jupyter notebooks.
-Falls back to synthetic data for any file that hasn't been generated yet.
+from __future__ import annotations
 
-Expected files in  ./dashboard_data/  (auto-created by notebook export cells):
-  site_metadata.json        ← data extraction notebook
-  ozone_predictions.parquet ← model evaluation notebook
-  annual_vegetation.parquet ← model evaluation notebook
-  model_metrics.json        ← model training notebook
-  feature_importance.json   ← model training notebook
-  coverage_audit.csv        ← data extraction notebook
-  pipeline_status.json      ← written by every notebook on completion
-"""
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Tuple, Optional, List
 
-import os, json, hashlib
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
-from pathlib import Path
 
+# --------
+# Config
+# --------
 DATA_DIR = Path(__file__).parent / "dashboard_data"
 DATA_DIR.mkdir(exist_ok=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  SITE REGISTRY  (canonical — used as fallback if site_metadata.json absent)
-# ─────────────────────────────────────────────────────────────────────────────
-SITES_DEFAULT = {
-    "CAN407": {"name":"Cabrillo NM",           "lat":32.67,"lon":-117.24,"elev":80,
-               "coast_km":19.1,  "marine":"COASTAL",    "region":"Southern Coast",
-               "status":"ACTIVE",     "yr_start":1995,"yr_end":2025},
-    "CON186": {"name":"Converse Basin",         "lat":36.86,"lon":-118.81,"elev":2195,
-               "coast_km":221.0, "marine":"INLAND",     "region":"Sierra Nevada",
-               "status":"TRAIN_ONLY","yr_start":2003,"yr_end":2011},
-    "DEV412": {"name":"Devils Postpile",        "lat":37.62,"lon":-119.08,"elev":2300,
-               "coast_km":215.0, "marine":"INLAND",     "region":"Sierra Nevada",
-               "status":"NO_TRAIN",  "yr_start":1995,"yr_end":2025},
-    "JOT403": {"name":"Joshua Tree NP",         "lat":34.06,"lon":-116.39,"elev":1244,
-               "coast_km":179.7, "marine":"TRANSITION", "region":"Mojave Desert",
-               "status":"ACTIVE",     "yr_start":1996,"yr_end":2025},
-    "LAV410": {"name":"Lassen Volcanic NP",     "lat":40.54,"lon":-121.58,"elev":1756,
-               "coast_km":225.5, "marine":"INLAND",     "region":"Cascades",
-               "status":"ACTIVE",     "yr_start":1992,"yr_end":2025},
-    "LPO010": {"name":"Lassen Pass",            "lat":40.44,"lon":-121.50,"elev":1829,
-               "coast_km":222.0, "marine":"INLAND",     "region":"Cascades",
-               "status":"TRAIN_ONLY","yr_start":2005,"yr_end":2015},
-    "PIN414": {"name":"Pinnacles NP",           "lat":36.49,"lon":-121.18,"elev":335,
-               "coast_km":64.5,  "marine":"COASTAL",    "region":"Central Coast",
-               "status":"ACTIVE",     "yr_start":2008,"yr_end":2025},
-    "SEK402": {"name":"Sequoia NP",             "lat":36.49,"lon":-118.83,"elev":1920,
-               "coast_km":221.2, "marine":"INLAND",     "region":"Sierra Nevada S.",
-               "status":"TRAIN_ONLY","yr_start":1997,"yr_end":2004},
-    "SEK430": {"name":"Sequoia (lower)",         "lat":36.56,"lon":-118.77,"elev":1210,
-               "coast_km":215.0, "marine":"INLAND",     "region":"Sierra Nevada S.",
-               "status":"ACTIVE",     "yr_start":2003,"yr_end":2025},
-    "SND152": {"name":"San Bernardino NF",      "lat":34.19,"lon":-116.77,"elev":1737,
-               "coast_km":149.5, "marine":"TRANSITION", "region":"S. CA Mountains",
-               "status":"ACTIVE",     "yr_start":1994,"yr_end":2025},
-    "YOS204": {"name":"Yosemite (Turtleback)",  "lat":37.71,"lon":-119.74,"elev":1603,
-               "coast_km":227.0, "marine":"INLAND",     "region":"Sierra Nevada C.",
-               "status":"TRAIN_ONLY","yr_start":2012,"yr_end":2013},
-    "YOS404": {"name":"Yosemite NP",            "lat":37.71,"lon":-119.71,"elev":1603,
-               "coast_km":229.7, "marine":"INLAND",     "region":"Sierra Nevada C.",
-               "status":"ACTIVE",     "yr_start":1988,"yr_end":2025},
+NAAQS_PPB_DEFAULT = 70.0
+
+# Minimal default site schema (used only if metadata is missing)
+DEFAULT_SITE_FIELDS = {
+    "name": "Unknown",
+    "lat": np.nan,
+    "lon": np.nan,
+    "elev": np.nan,
+    "coast_km": np.nan,
+    "marine": "",
+    "region": "",
+    "status": "ACTIVE",  # ACTIVE / TRAIN_ONLY / NO_TRAIN
+    "yr_start": 0,
+    "yr_end": 0,
+    "n_rows": 0,
+    "pct_valid": np.nan,
 }
 
-FIRE_YEARS = {2018, 2020, 2021}
-NAAQS      = 70.0
+STATUS_ORDER = {"ACTIVE": 0, "TRAIN_ONLY": 1, "NO_TRAIN": 2}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  SYNTHETIC FALLBACK GENERATORS
-# ─────────────────────────────────────────────────────────────────────────────
-def _seed(s):
-    return int(hashlib.md5(s.encode()).hexdigest(), 16) % (2**31)
+@dataclass(frozen=True)
+class LoadResult:
+    data: object
+    source: str          # "live" or "missing"
+    path: Optional[Path] # where it came from
 
 
-def _synth_ozone(sid, days=120):
-    rng  = np.random.default_rng(_seed(sid))
-    info = SITES_DEFAULT[sid]
-    n    = days * 24
-    t    = np.arange(n)
-    base = 30 + info["elev"] * 0.006 + (8 if info["marine"] == "INLAND" else 0)
-    doy  = (t / 24) % 365
-    ozone = np.clip(
-        base
-        + 12 * np.sin(2 * np.pi * (doy - 80) / 365)
-        + 10 * np.maximum(0, np.sin(np.pi * ((t % 24) - 6) / 12))
-        + rng.normal(0, 3.5, n),
-        5, 115,
-    ).astype("float32")
-    dates = pd.date_range(end=pd.Timestamp.today().normalize(), periods=n, freq="h")
+def _read_json(path: Path) -> dict:
+    with open(path, "r") as f:
+        return json.load(f)
 
-    def pred(h):
-        err  = 2.2 * (1 + h / 9)
-        bias = -0.4 * (h / 24)
-        return np.clip(ozone + bias + rng.normal(0, err, n), 5, 130).astype("float32")
 
-    return pd.DataFrame({
-        "DATE_TIME": dates, "SITE_ID": sid, "OZONE": ozone,
-        "pred_t1": pred(1), "pred_t8": pred(8), "pred_t24": pred(24),
+def _safe_load_json(path: Path) -> LoadResult:
+    if not path.exists():
+        return LoadResult({}, "missing", None)
+    try:
+        return LoadResult(_read_json(path), "live", path)
+    except Exception:
+        return LoadResult({}, "missing", path)
+
+
+def _safe_load_csv(path: Path) -> LoadResult:
+    if not path.exists():
+        return LoadResult(pd.DataFrame(), "missing", None)
+    try:
+        return LoadResult(pd.read_csv(path), "live", path)
+    except Exception:
+        return LoadResult(pd.DataFrame(), "missing", path)
+
+
+def _safe_load_parquet(path: Path) -> LoadResult:
+    if not path.exists():
+        return LoadResult(pd.DataFrame(), "missing", None)
+    try:
+        df = pd.read_parquet(path)
+        return LoadResult(df, "live", path)
+    except Exception:
+        return LoadResult(pd.DataFrame(), "missing", path)
+
+
+def load_pipeline_status() -> LoadResult:
+    return _safe_load_json(DATA_DIR / "pipeline_status.json")
+
+
+def load_site_metadata() -> LoadResult:
+    return _safe_load_json(DATA_DIR / "site_metadata.json")
+
+
+def load_ozone_predictions() -> LoadResult:
+    lr = _safe_load_parquet(DATA_DIR / "ozone_predictions.parquet")
+    df = lr.data if isinstance(lr.data, pd.DataFrame) else pd.DataFrame()
+
+    if len(df) == 0:
+        return lr
+
+    # Normalize core columns
+    if "DATE_TIME" in df.columns:
+        df["DATE_TIME"] = pd.to_datetime(df["DATE_TIME"], errors="coerce")
+
+    # Ensure standard pred columns exist
+    for col in ["pred_t1", "pred_t8", "pred_t24"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    if "is_extrapolation" not in df.columns:
+        df["is_extrapolation"] = False
+
+    # Keep only expected columns if present
+    keep = [c for c in ["DATE_TIME", "SITE_ID", "OZONE", "pred_t1", "pred_t8", "pred_t24", "is_extrapolation"] if c in df.columns]
+    df = df[keep].dropna(subset=["DATE_TIME", "SITE_ID"]).sort_values(["SITE_ID", "DATE_TIME"])
+    return LoadResult(df, lr.source, lr.path)
+
+
+def load_annual_vegetation() -> LoadResult:
+    lr = _safe_load_parquet(DATA_DIR / "annual_vegetation.parquet")
+    df = lr.data if isinstance(lr.data, pd.DataFrame) else pd.DataFrame()
+    if len(df) == 0:
+        return lr
+
+    # Normalize
+    if "year" in df.columns:
+        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+
+    for col in ["w126", "aot40"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    if "is_fire_year" not in df.columns:
+        df["is_fire_year"] = False
+
+    keep = [c for c in df.columns if c in {
+        "SITE_ID","year","is_fire_year","w126","aot40",
+        "mean_o3","p95_o3","max_o3",
+        "hours_above_40","hours_above_60","hours_above_80",
+        "valid_hours","pct_complete","sufficient_data"
+    }]
+    df = df[keep].dropna(subset=["SITE_ID", "year"]).sort_values(["SITE_ID", "year"])
+    return LoadResult(df, lr.source, lr.path)
+
+
+def load_model_metrics() -> LoadResult:
+    return _safe_load_json(DATA_DIR / "model_metrics.json")
+
+
+def load_feature_importance() -> LoadResult:
+    return _safe_load_json(DATA_DIR / "feature_importance.json")
+
+
+def load_coverage_audit() -> LoadResult:
+    return _safe_load_csv(DATA_DIR / "coverage_audit.csv")
+
+
+def load_site_coverage_audit() -> LoadResult:
+    return _safe_load_csv(DATA_DIR / "site_coverage_audit.csv")
+
+
+def load_gap_metadata() -> LoadResult:
+    return _safe_load_json(DATA_DIR / "gap_metadata.json")
+
+
+def load_eval_gap_summary() -> LoadResult:
+    return _safe_load_json(DATA_DIR / "eval_gap_summary.json")
+
+
+def load_clf_metadata() -> LoadResult:
+    return _safe_load_json(DATA_DIR / "clf_metadata.json")
+
+
+def derive_site_index(
+    site_meta: dict,
+    pipeline: dict,
+    coverage: pd.DataFrame,
+    site_cov: pd.DataFrame,
+    preds: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Build one canonical site table used everywhere (map, dropdowns, coverage tables).
+    Fixes the common failure mode: site_metadata missing sites that exist in other exports.
+    """
+    # Collect sites from every source we have
+    sites = set()
+
+    # pipeline_status lists expected sites
+    for k in ["data_extraction", "model_training", "model_evaluation"]:
+        v = pipeline.get(k, {})
+        for s in v.get("sites", []) or []:
+            sites.add(s)
+
+    if isinstance(coverage, pd.DataFrame) and "SITE_ID" in coverage.columns:
+        sites |= set(coverage["SITE_ID"].astype(str).unique())
+
+    if isinstance(site_cov, pd.DataFrame) and "SITE_ID" in site_cov.columns:
+        sites |= set(site_cov["SITE_ID"].astype(str).unique())
+
+    if isinstance(preds, pd.DataFrame) and "SITE_ID" in preds.columns:
+        sites |= set(preds["SITE_ID"].astype(str).unique())
+
+    # site_metadata can contain extras; include them too
+    sites |= set(site_meta.keys())
+
+    rows = []
+    cov_idx = None
+    if isinstance(coverage, pd.DataFrame) and len(coverage) and "SITE_ID" in coverage.columns:
+        cov_idx = coverage.set_index("SITE_ID")
+
+    sc_idx = None
+    if isinstance(site_cov, pd.DataFrame) and len(site_cov) and "SITE_ID" in site_cov.columns:
+        sc_idx = site_cov.set_index("SITE_ID")
+
+    for sid in sorted(sites):
+        meta = dict(DEFAULT_SITE_FIELDS)
+        meta.update(site_meta.get(sid, {}))
+
+        # attach coverage fields if present
+        if cov_idx is not None and sid in cov_idx.index:
+            r = cov_idx.loc[sid]
+            # if your "first/last" are YYYY-MM, keep them
+            if "first" in r: meta["first"] = r["first"]
+            if "last" in r:  meta["last"] = r["last"]
+            if "n_rows" in r: meta["n_rows"] = int(r["n_rows"])
+            if "pct_valid" in r: meta["pct_valid"] = float(r["pct_valid"])
+
+        # attach split counts if present
+        if sc_idx is not None and sid in sc_idx.index:
+            r = sc_idx.loc[sid]
+            for c in ["n_train", "n_val", "n_test"]:
+                if c in r:
+                    meta[c] = int(r[c])
+
+        rows.append({"SITE_ID": sid, **meta})
+
+    out = pd.DataFrame(rows)
+
+    # Normalize status values
+    out["status"] = out["status"].astype(str).str.upper().replace({
+        "TRAINONLY": "TRAIN_ONLY",
+        "NO TRAIN": "NO_TRAIN",
+        "NOTRAIN": "NO_TRAIN",
     })
 
-
-def _synth_annual(sid):
-    rng  = np.random.default_rng(_seed(sid + "v"))
-    info = SITES_DEFAULT[sid]
-    years = list(range(max(info["yr_start"], 2000), min(info["yr_end"] + 1, 2025)))
-    base  = 22 + info["elev"] * 0.022 + (12 if info["marine"] == "INLAND" else 0)
-    rows  = []
-    for yr in years:
-        trend = -0.55 * (yr - 2000)
-        fire  = -4.2 if yr in FIRE_YEARS else 0
-        w126  = max(4, base + trend + fire + float(rng.normal(0, 2.5)))
-        aot40 = max(0, w126 * 640 + float(rng.normal(0, 1400)))
-        rows.append({"SITE_ID": sid, "year": yr,
-                     "w126": round(w126, 2), "aot40": round(aot40, 0),
-                     "is_fire_year": yr in FIRE_YEARS,
-                     "pct_complete": round(float(rng.uniform(72, 100)), 1)})
-    return pd.DataFrame(rows)
-
-
-def _synth_metrics(sid):
-    rng     = np.random.default_rng(_seed(sid + "m"))
-    info    = SITES_DEFAULT[sid]
-    penalty = 0.8 if info["status"] == "NO_TRAIN" else (0.25 if info["status"] == "TRAIN_ONLY" else 0)
-    out = {}
-    for H in [1, 8, 24]:
-        r2 = max(0.05, 0.965 - H * 0.021 - penalty * 0.14 + float(rng.uniform(-0.01, 0.01)))
-        if sid == "LAV410" and H == 24:
-            r2 = 0.40
-        miss = round(0.642 + float(rng.uniform(-0.04, 0.04)), 3) if H == 24 \
-               else round(0.28 + float(rng.uniform(-0.05, 0.05)), 3)
-        out[str(H)] = {
-            "mae":       round(1.8 + H * 0.21 + penalty + float(rng.uniform(-0.1, 0.1)), 3),
-            "rmse":      round(2.5 + H * 0.30 + penalty + float(rng.uniform(-0.1, 0.1)), 3),
-            "r2":        round(r2, 3),
-            "recall":    round(max(0.0, (0.44 if H != 24 else 0.04) - penalty * 0.08 + float(rng.uniform(-0.03, 0.03))), 3),
-            "precision": round(max(0.1, 0.60 - penalty * 0.09 + float(rng.uniform(-0.03, 0.03))), 3),
-            "miss_rate": miss,
-            "n_test":    int(SITES_DEFAULT[sid].get("n_test", 30000)),
-        }
+    # Sort stable
+    out["status_rank"] = out["status"].map(STATUS_ORDER).fillna(9)
+    out = out.sort_values(["status_rank", "SITE_ID"]).drop(columns=["status_rank"])
     return out
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  PUBLIC LOADERS  — each returns (data, source_label)
-#  source_label is "live" when loaded from real notebook output, else "synthetic"
-# ─────────────────────────────────────────────────────────────────────────────
-
-def load_site_metadata():
-    path = DATA_DIR / "site_metadata.json"
-    if path.exists():
-        with open(path) as f:
-            return json.load(f), "live"
-    return SITES_DEFAULT, "synthetic"
-
-
-def load_ozone_predictions(sites):
-    path = DATA_DIR / "ozone_predictions.parquet"
-    if path.exists():
-        df = pd.read_parquet(path)
-        df["DATE_TIME"] = pd.to_datetime(df["DATE_TIME"])
-        return df, "live"
-    frames = [_synth_ozone(sid) for sid in sites]
-    return pd.concat(frames, ignore_index=True), "synthetic"
-
-
-def load_annual_vegetation(sites):
-    path = DATA_DIR / "annual_vegetation.parquet"
-    if path.exists():
-        return pd.read_parquet(path), "live"
-    frames = [_synth_annual(sid) for sid in sites]
-    return pd.concat(frames, ignore_index=True), "synthetic"
-
-
-def load_model_metrics(sites):
-    path = DATA_DIR / "model_metrics.json"
-    if path.exists():
-        with open(path) as f:
-            return json.load(f), "live"
-    return {sid: _synth_metrics(sid) for sid in sites}, "synthetic"
-
-
-def load_feature_importance():
-    path = DATA_DIR / "feature_importance.json"
-    if path.exists():
-        with open(path) as f:
-            return json.load(f), "live"
-    default = {
-        "1":  {"Autoregressive (lag/rmean)": 61.2, "Met / Chem / PM": 36.6, "Calendar / Static": 2.2},
-        "8":  {"Autoregressive (lag/rmean)": 55.5, "Met / Chem / PM": 36.5, "Calendar / Static": 7.7},
-        "24": {"Autoregressive (lag/rmean)": 54.7, "Met / Chem / PM": 40.4, "Calendar / Static": 4.8},
-    }
-    return default, "synthetic"
-
-
-def load_coverage_audit(sites):
-    path = DATA_DIR / "coverage_audit.csv"
-    if path.exists():
-        return pd.read_csv(path), "live"
-    rows = []
-    for sid, info in SITES_DEFAULT.items():
-        if sid not in sites:
-            continue
-        nt = info.get("n_train", 0) if info["status"] != "NO_TRAIN" else 0
-        nv = info.get("n_val",   0) if info["status"] == "ACTIVE" else 0
-        ne = info.get("n_test",  0) if info["status"] == "ACTIVE" else 0
-        rows.append({
-            "SITE_ID":   sid, "name": info["name"],
-            "yr_start":  info["yr_start"], "yr_end": info["yr_end"],
-            "n_train":   nt, "n_val": nv, "n_test": ne,
-            "status":    info["status"],
-        })
-    return pd.DataFrame(rows), "synthetic"
-
-
-def load_pipeline_status():
-    path = DATA_DIR / "pipeline_status.json"
-    if path.exists():
-        with open(path) as f:
-            return json.load(f)
-    return {
-        "data_extraction":    {"status": "not_run", "timestamp": None, "rows": None},
-        "feature_engineering":{"status": "not_run", "timestamp": None, "features": None},
-        "model_training":     {"status": "not_run", "timestamp": None, "sites": None},
-        "model_evaluation":   {"status": "not_run", "timestamp": None, "test_rows": None},
-    }
