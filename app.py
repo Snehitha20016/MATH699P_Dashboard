@@ -259,10 +259,16 @@ def tab_forecast(site_meta, ozone_df, metrics):
     st.markdown('<div class="sec-title">Ozone Forecast — Observed vs Predicted</div>',
                 unsafe_allow_html=True)
     c1,c2,c3,c4 = st.columns([2,1.2,1.8,1])
-    site_opts = [(f"{s}  —  {site_meta[s]['name']}",s) for s in site_meta]
-    sel = c1.selectbox("Site",[v for v,_ in site_opts],
-                       index=[k for _,k in site_opts].index("SEK430"))
-    sid = dict(site_opts)[sel]
+    sites_with_preds = ozone_df['SITE_ID'].unique().tolist()
+    site_opts = sorted(
+        [(f"{s}  —  {site_meta[s]['name']}", s)
+         for s in sites_with_preds if s in site_meta]
+    )
+    labels      = [v for v,_ in site_opts]
+    ids         = [k for _,k in site_opts]
+    default_idx = ids.index("SEK430") if "SEK430" in ids else 0
+    sel         = c1.selectbox("Site", labels, index=default_idx)
+    sid         = dict(site_opts)[sel]
     H   = c2.radio("Horizon",[1,8,24],format_func=lambda h:f"t+{h}h",horizontal=True)
     model_opt = c3.selectbox("Model",["Global LightGBM","Site-Stratified LGB",
                                       "ETS / Ensemble (pending)"])
@@ -575,9 +581,11 @@ def tab_diagnostics(site_meta, metrics, feat_imp):
     st.markdown('<div class="sec-title">Model Diagnostics — Metrics & Feature Importance</div>',
                 unsafe_allow_html=True)
     c1,_ = st.columns([2,3])
-    site_opts = [(f"{s}  —  {site_meta[s]['name']}",s) for s in site_meta]
-    sel = c1.selectbox("Site",[v for v,_ in site_opts],
-                       index=[k for _,k in site_opts].index("SEK430"),key="diag_site")
+    site_opts    = [(f"{s}  —  {site_meta[s]['name']}",s) for s in site_meta]
+    diag_ids     = [k for _,k in site_opts]
+    diag_labels  = [v for v,_ in site_opts]
+    diag_default = diag_ids.index("SEK430") if "SEK430" in diag_ids else 0
+    sel = c1.selectbox("Site", diag_labels, index=diag_default, key="diag_site")
     sid  = dict(site_opts)[sel]
     info = site_meta[sid]
     if info["status"]=="NO_TRAIN":
