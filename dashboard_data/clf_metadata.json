@@ -1,0 +1,7 @@
+{
+  "best_threshold": 0.7344,
+  "val_auc": 0.9864,
+  "val_f1": 0.6124,
+  "test_auc": 0.9853,
+  "naaqs_threshold_ppb": 70.0
+}
