@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from datetime import datetime
 import streamlit as st
 import numpy as np
@@ -8,10 +7,19 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from data_loader import (
-    load_pipeline_status, load_site_metadata, load_ozone_predictions,
-    load_annual_vegetation, load_model_metrics, load_feature_importance,
-    load_coverage_audit, load_site_coverage_audit, load_gap_metadata,
-    load_eval_gap_summary, load_clf_metadata, derive_site_index, NAAQS_PPB_DEFAULT,
+    load_pipeline_status,
+    load_site_metadata,
+    load_ozone_predictions,
+    load_annual_vegetation,
+    load_model_metrics,
+    load_feature_importance,
+    load_coverage_audit,
+    load_site_coverage_audit,
+    load_gap_metadata,
+    load_eval_gap_summary,
+    load_clf_metadata,
+    derive_site_index,
+    NAAQS_PPB_DEFAULT,
 )
 
 st.set_page_config(page_title="CASTNET CA Ozone Dashboard", page_icon="🌬️", layout="wide")
@@ -22,24 +30,24 @@ st.set_page_config(page_title="CASTNET CA Ozone Dashboard", page_icon="🌬️",
 @st.cache_data(ttl=60, show_spinner=False)
 def load_all():
     pipeline_lr = load_pipeline_status()
-    site_lr     = load_site_metadata()
-    preds_lr    = load_ozone_predictions()
-    annual_lr   = load_annual_vegetation()
-    metrics_lr  = load_model_metrics()
-    feat_lr     = load_feature_importance()
-    cov_lr      = load_coverage_audit()
-    scov_lr     = load_site_coverage_audit()
-    gap_lr      = load_gap_metadata()
-    egap_lr     = load_eval_gap_summary()
-    clf_lr      = load_clf_metadata()
+    site_lr = load_site_metadata()
+    preds_lr = load_ozone_predictions()
+    annual_lr = load_annual_vegetation()
+    metrics_lr = load_model_metrics()
+    feat_lr = load_feature_importance()
+    cov_lr = load_coverage_audit()
+    scov_lr = load_site_coverage_audit()
+    gap_lr = load_gap_metadata()
+    egap_lr = load_eval_gap_summary()
+    clf_lr = load_clf_metadata()
 
     pipeline = pipeline_lr.data or {}
     site_meta = site_lr.data or {}
 
-    preds  = preds_lr.data if isinstance(preds_lr.data, pd.DataFrame) else pd.DataFrame()
+    preds = preds_lr.data if isinstance(preds_lr.data, pd.DataFrame) else pd.DataFrame()
     annual = annual_lr.data if isinstance(annual_lr.data, pd.DataFrame) else pd.DataFrame()
-    cov    = cov_lr.data if isinstance(cov_lr.data, pd.DataFrame) else pd.DataFrame()
-    scov   = scov_lr.data if isinstance(scov_lr.data, pd.DataFrame) else pd.DataFrame()
+    cov = cov_lr.data if isinstance(cov_lr.data, pd.DataFrame) else pd.DataFrame()
+    scov = scov_lr.data if isinstance(scov_lr.data, pd.DataFrame) else pd.DataFrame()
 
     site_index = derive_site_index(site_meta, pipeline, cov, scov, preds)
 
@@ -94,7 +102,14 @@ def sidebar(data):
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Pipeline status")
     pipeline = data["pipeline"]
-    for step in ["data_extraction", "feature_engineering", "model_training", "gap_fixes", "model_evaluation", "vegetation_exposure"]:
+    for step in [
+        "data_extraction",
+        "feature_engineering",
+        "model_training",
+        "gap_fixes",
+        "model_evaluation",
+        "vegetation_exposure",
+    ]:
         info = pipeline.get(step, {})
         status = info.get("status", "not_run")
         ts = info.get("timestamp")
@@ -104,13 +119,14 @@ def sidebar(data):
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Data sources")
     for k, v in data["sources"].items():
-        st.sidebar.write(f"- {k}: **{v.upper()}**")
+        st.sidebar.write(f"- {k}: **{str(v).upper()}**")
 
 
 # -----------------------
 # Page helpers
 # -----------------------
 STATUS_COLOR = {"ACTIVE": "#2ecc71", "TRAIN_ONLY": "#f39c12", "NO_TRAIN": "#e74c3c"}
+
 
 def site_map_tab(site_index: pd.DataFrame):
     st.subheader("🗺️ Site Map")
@@ -123,24 +139,30 @@ def site_map_tab(site_index: pd.DataFrame):
 
     fig = go.Figure()
     for status, g in df.groupby("status", dropna=False):
-        fig.add_trace(go.Scattermapbox(
-            lat=g["lat"], lon=g["lon"],
-            mode="markers+text",
-            text=g["SITE_ID"],
-            textposition="top right",
-            marker=dict(size=14, color=STATUS_COLOR.get(status, "#3498db")),
-            name=str(status),
-            hovertemplate="<b>%{text}</b><br>" +
-                          "name=%{customdata[0]}<br>" +
-                          "region=%{customdata[1]}<br>" +
-                          "yrs=%{customdata[2]}–%{customdata[3]}<extra></extra>",
-            customdata=np.stack([
-                g["name"].fillna(""),
-                g["region"].fillna(""),
-                g["yr_start"].fillna(0).astype(int),
-                g["yr_end"].fillna(0).astype(int),
-            ], axis=1),
-        ))
+        fig.add_trace(
+            go.Scattermapbox(
+                lat=g["lat"],
+                lon=g["lon"],
+                mode="markers+text",
+                text=g["SITE_ID"],
+                textposition="top right",
+                marker=dict(size=14, color=STATUS_COLOR.get(status, "#3498db")),
+                name=str(status),
+                hovertemplate="<b>%{text}</b><br>"
+                + "name=%{customdata[0]}<br>"
+                + "region=%{customdata[1]}<br>"
+                + "yrs=%{customdata[2]}–%{customdata[3]}<extra></extra>",
+                customdata=np.stack(
+                    [
+                        g.get("name", "").fillna("").to_numpy(),
+                        g.get("region", "").fillna("").to_numpy(),
+                        g.get("yr_start", 0).fillna(0).astype(int).to_numpy(),
+                        g.get("yr_end", 0).fillna(0).astype(int).to_numpy(),
+                    ],
+                    axis=1,
+                ),
+            )
+        )
 
     fig.update_layout(
         mapbox=dict(style="open-street-map", center=dict(lat=37.3, lon=-119.6), zoom=5.3),
@@ -151,10 +173,11 @@ def site_map_tab(site_index: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Site registry (canonical)")
+    cols = [c for c in ["SITE_ID", "name", "status", "region", "yr_start", "yr_end"] if c in site_index.columns]
     st.dataframe(
-        site_index.sort_values(["status", "SITE_ID"]),
+        site_index.sort_values(["status", "SITE_ID"])[cols],
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
 
 
@@ -165,7 +188,6 @@ def forecast_tab(site_index: pd.DataFrame, preds: pd.DataFrame, metrics: dict, n
         st.warning("Missing ozone_predictions.parquet")
         return
 
-    # Only allow sites that exist in preds
     pred_sites = sorted(preds["SITE_ID"].astype(str).unique().tolist())
     label_map = {r["SITE_ID"]: f'{r["SITE_ID"]} — {r.get("name","")}' for _, r in site_index.iterrows()}
     options = [label_map.get(s, s) for s in pred_sites]
@@ -184,7 +206,6 @@ def forecast_tab(site_index: pd.DataFrame, preds: pd.DataFrame, metrics: dict, n
         st.warning("No rows for this site.")
         return
 
-    # metrics card if present
     m = (metrics.get(sid, {}) or {}).get(str(horizon), {})
     if m:
         a, b, c = st.columns(3)
@@ -193,56 +214,99 @@ def forecast_tab(site_index: pd.DataFrame, preds: pd.DataFrame, metrics: dict, n
         c.metric("R²", f'{m.get("r2", float("nan")):.3f}')
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=sdf["DATE_TIME"], y=sdf["OZONE"],
-        name="Observed", mode="lines"
-    ))
-    fig.add_trace(go.Scatter(
-        x=sdf["DATE_TIME"], y=sdf[pcol],
-        name=f"Predicted {pcol}", mode="lines"
-    ))
+    fig.add_trace(go.Scatter(x=sdf["DATE_TIME"], y=sdf["OZONE"], name="Observed", mode="lines"))
+    fig.add_trace(go.Scatter(x=sdf["DATE_TIME"], y=sdf[pcol], name=f"Predicted {pcol}", mode="lines"))
     fig.add_hline(y=naaqs, line_dash="dot", annotation_text=f"NAAQS {naaqs:.0f} ppb")
     fig.update_layout(height=520, margin=dict(l=10, r=10, t=30, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    # quick exceedance summary
     exc_obs = int((sdf["OZONE"] >= naaqs).sum())
     exc_pred = int((sdf[pcol] >= naaqs).sum())
     st.caption(f"Observed exceedance hours in window: **{exc_obs}** | Predicted exceedance hours: **{exc_pred}**")
 
 
 def exceedance_tab(site_index: pd.DataFrame, preds: pd.DataFrame, clf: dict, naaqs: float):
-    st.subheader("⚠️ Exceedance Alerts (simple, data-driven)")
+    st.subheader("⚠️ Exceedance Alerts (historical playback enabled)")
+
     if len(preds) == 0:
         st.warning("Missing ozone_predictions.parquet")
         return
 
+    preds = preds.copy()
+    preds["DATE_TIME"] = pd.to_datetime(preds["DATE_TIME"])
+
     thr = float(clf.get("best_threshold", 0.5))
     st.info(f"Classifier metadata loaded (best_threshold={thr:.3f}, NAAQS={naaqs:.0f} ppb).")
 
-    # A pragmatic “risk” score without needing a separate prob column:
-    # use fraction of next-24 predicted hours exceeding NAAQS on t+24 series.
+    # Calendar picker (single control)
+    available_dates = pd.to_datetime(preds["DATE_TIME"].dt.date.unique())
+    available_dates = sorted(available_dates)
+    if not available_dates:
+        st.warning("No dates found in predictions.")
+        return
+
+    min_d = available_dates[0].date()
+    max_d = available_dates[-1].date()
+
+    date_sel = st.date_input("Select date", value=max_d, min_value=min_d, max_value=max_d)
+
+    # If user picks a date with no data, snap to nearest available date
+    avail_set = set(d.date() for d in available_dates)
+    if date_sel not in avail_set:
+        nearest = min(available_dates, key=lambda d: abs((d.date() - date_sel).days)).date()
+        st.warning(f"No data for {date_sel}. Showing nearest available date: {nearest}")
+        date_sel = nearest
+
+    st.caption(f"Showing alerts as of {date_sel}")
+
+    # Compute per-site alert summary for selected day
     rows = []
     for sid in sorted(preds["SITE_ID"].unique()):
-        sdf = preds[preds["SITE_ID"] == sid].sort_values("DATE_TIME").tail(24)
+        sdf = preds[(preds["SITE_ID"] == sid) & (preds["DATE_TIME"].dt.date == date_sel)].sort_values("DATE_TIME")
         if len(sdf) < 6:
             continue
+
         frac = float((sdf["pred_t24"] >= naaqs).mean())
         mx = float(sdf["pred_t24"].max())
+
         rows.append({"SITE_ID": sid, "risk_frac": frac, "max_pred_t24": mx})
 
     out = pd.DataFrame(rows)
     if len(out) == 0:
-        st.warning("Not enough recent prediction rows to compute alerts.")
+        st.warning("Not enough prediction rows to compute alerts.")
         return
 
+    # Authoritative site name overrides
+    NAME_OVERRIDES = {
+        "CON186": "Converse Station",
+        "DEV412": "Death Valley NM",
+        "JOT403": "Joshua Tree NP",
+        "LAV410": "Lassen Volcanic NP",
+        "LPO010": "La Posta Band of Indians",
+        "PIN414": "Pinnacles NM",
+        "SEK402": "Sequoia NP - Lookout Pt",
+        "SEK430": "Sequoia NP - Ash Mountain",
+        "YOS204": "Yosemite NP Collocated",
+        "YOS404": "Yosemite NP - Turtleback Dome",
+    }
+
     out = out.merge(site_index[["SITE_ID", "name", "status"]], on="SITE_ID", how="left")
+    out["name"] = out["SITE_ID"].map(NAME_OVERRIDES).fillna(out["name"])
+
+    # Put name next to SITE_ID
+    out = out[["SITE_ID", "name", "risk_frac", "max_pred_t24", "status"]]
     out = out.sort_values(["risk_frac", "max_pred_t24"], ascending=False)
 
     st.dataframe(out, use_container_width=True, hide_index=True)
 
-    fig = go.Figure(go.Bar(x=out["SITE_ID"], y=out["risk_frac"], text=(out["risk_frac"] * 100).round(0).astype(int).astype(str) + "%"))
-    fig.update_layout(height=340, yaxis_title="Fraction of next 24h ≥ NAAQS (from pred_t24)")
+    fig = go.Figure(
+        go.Bar(
+            x=out["SITE_ID"],
+            y=out["risk_frac"],
+            text=(out["risk_frac"] * 100).round(0).astype(int).astype(str) + "%",
+        )
+    )
+    fig.update_layout(height=340, yaxis_title="Fraction of next 24h ≥ NAAQS")
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -267,10 +331,15 @@ def vegetation_tab(site_index: pd.DataFrame, annual: pd.DataFrame):
     fig.add_trace(go.Scatter(x=sdf["year"], y=sdf[metric], mode="lines+markers", name=metric))
     if "is_fire_year" in sdf.columns:
         fires = sdf[sdf["is_fire_year"] == True]
-        fig.add_trace(go.Scatter(
-            x=fires["year"], y=fires[metric],
-            mode="markers", name="fire year", marker=dict(size=10, symbol="diamond")
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=fires["year"],
+                y=fires[metric],
+                mode="markers",
+                name="fire year",
+                marker=dict(size=10, symbol="diamond"),
+            )
+        )
     fig.update_layout(height=450, xaxis_title="year", yaxis_title=metric)
     st.plotly_chart(fig, use_container_width=True)
 
