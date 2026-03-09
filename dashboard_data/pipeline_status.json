@@ -1,0 +1,94 @@
+{
+  "data_extraction": {
+    "status": "complete",
+    "timestamp": "2026-03-08T16:53:28.276649",
+    "rows": 1960605,
+    "sites": [
+      "CAN407",
+      "CON186",
+      "DEV412",
+      "JOT403",
+      "LAV410",
+      "LPO010",
+      "PIN414",
+      "SEK402",
+      "SEK430",
+      "SND152",
+      "YOS204",
+      "YOS404"
+    ]
+  },
+  "feature_engineering": {
+    "status": "complete",
+    "timestamp": "2026-03-08T12:40:36.360418",
+    "n_features": 101,
+    "n_sites": 12,
+    "date_range": [
+      "1990-01-01",
+      "2025-05-31"
+    ]
+  },
+  "model_training": {
+    "status": "complete",
+    "timestamp": "2026-03-08T12:48:12.224361",
+    "sites": [
+      "CAN407",
+      "CON186",
+      "DEV412",
+      "JOT403",
+      "LAV410",
+      "LPO010",
+      "PIN414",
+      "SEK402",
+      "SEK430",
+      "SND152",
+      "YOS204",
+      "YOS404"
+    ],
+    "horizons": [
+      1,
+      8,
+      24
+    ],
+    "train_end": "2018-12-31",
+    "val_end": "2020-12-31",
+    "test_start": "2021-01-01"
+  },
+  "gap_fixes": {
+    "status": "complete",
+    "timestamp": "2026-03-08T12:49:04.342518",
+    "gap1_sites": [
+      "CON186",
+      "SEK402",
+      "YOS204"
+    ],
+    "gap2_sites": []
+  },
+  "model_evaluation": {
+    "status": "complete",
+    "timestamp": "2026-03-08T17:27:51.935994",
+    "test_rows": 298126,
+    "sites": [
+      "CAN407",
+      "DEV412",
+      "JOT403",
+      "LAV410",
+      "LPO010",
+      "PIN414",
+      "SEK430",
+      "SND152",
+      "YOS404"
+    ]
+  },
+  "vegetation_exposure": {
+    "status": "complete",
+    "timestamp": "2026-03-08T17:36:07.005355",
+    "site_year_rows": 235,
+    "fire_years": [
+      2017,
+      2018,
+      2020,
+      2021
+    ]
+  }
+}
